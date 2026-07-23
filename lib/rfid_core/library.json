@@ -1,0 +1,9 @@
+{
+  "name": "rfid_core",
+  "version": "1.0.0",
+  "description": "Host-testable RFID protocol, reader state machine, and TTS queue",
+  "build": {
+    "includeDir": "include",
+    "srcDir": "src"
+  }
+}
