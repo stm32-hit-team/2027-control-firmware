@@ -1,0 +1,10 @@
+{
+  "alwaysUpdateLinks": true,
+  "newLinkFormat": "shortest",
+  "linkStyle": "wiki",
+  "useMarkdownLinks": false,
+  "strictLineBreaks": false,
+  "showLineNumber": true,
+  "defaultViewMode": "preview",
+  "livePreview": false
+}
