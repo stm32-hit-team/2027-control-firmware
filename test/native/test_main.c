@@ -11,14 +11,17 @@
  *
  * 跑法：sh scripts/run_host_tests.sh
  */
-#include "rfid_protocol.h"
-#include "rfid_reader.h"
-#include "tts_service.h"
-
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+
+#include "announce.h"
+#include "app_config.h"
+#include "rfid_protocol.h"
+#include "rfid_reader.h"
+#include "soft_start.h"
+#include "tts_service.h"
 
 /* 求数组元素个数。 */
 #define ARRAY_LEN(array) (sizeof(array) / sizeof((array)[0]))
@@ -611,8 +614,89 @@ static void test_tts_queue_capacity_and_ascii_duration(void)
     CHECK(service.busy_until_ms == 840U);
 }
 
+enum {
+    SOFT_START_TEST_MID_RAW = 2048,
+    SOFT_START_TEST_OVER_RAW = APP_ADC_FULL_SCALE + 1
+};
+
+/* 核对 12 位 ADC 两端和中间一点对应的缓启动等待时间。 */
+static void test_soft_start_maps_adc_to_delay(void);
+
+/* 两次 speak_now 都立刻发出去，中间不用 tick。 */
+static void test_announce_sends_current_text_immediately(void);
+
+/* 语速还待发时，第一次 speak_now 先发语速再发正文。 */
+static void test_announce_sends_speed_once_then_text(void);
+
 /*
- * 入口。把十个测试依次跑完，最后统一报结果。
+ * 测试十一：PB1 的 ADC 读数换成缓启动等待时间。
+ *
+ * 0 对应最短等待，满量程对应最长等待，超过满量程按满量程算。
+ * 中间值按线性插值，公式和 soft_start_delay_ms 一致。
+ */
+static void test_soft_start_maps_adc_to_delay(void)
+{
+    uint32_t mid_delay_ms =
+        (uint32_t)APP_SOFT_START_MIN_MS +
+        ((uint32_t)APP_SOFT_START_MAX_MS - (uint32_t)APP_SOFT_START_MIN_MS) *
+            (uint32_t)SOFT_START_TEST_MID_RAW / (uint32_t)APP_ADC_FULL_SCALE;
+
+    CHECK(soft_start_delay_ms(0U) == (uint32_t)APP_SOFT_START_MIN_MS);
+    CHECK(soft_start_delay_ms((uint16_t)APP_ADC_FULL_SCALE) ==
+          (uint32_t)APP_SOFT_START_MAX_MS);
+    CHECK(soft_start_delay_ms((uint16_t)SOFT_START_TEST_OVER_RAW) ==
+          (uint32_t)APP_SOFT_START_MAX_MS);
+    CHECK(soft_start_delay_ms((uint16_t)SOFT_START_TEST_MID_RAW) ==
+          mid_delay_ms);
+}
+
+/*
+ * 测试十二：读到新点立刻发当前文字，不必等上一条念完。
+ *
+ * 第二次 speak_now 紧接着第一次，中间没有 tick。
+ * 两条都应该已经发出去，不能出现排队或忙等。
+ */
+static void test_announce_sends_current_text_immediately(void)
+{
+    static const uint8_t first[] = {'A', '1'};
+    static const uint8_t second[] = {'B', '2'};
+    tts_fixture_t fixture = {0};
+    announce_t service = {0};
+
+    announce_init(&service, capture_tts_write, &fixture, false, 0U);
+    CHECK(announce_speak_now(&service, first, sizeof(first)));
+    CHECK(announce_speak_now(&service, second, sizeof(second)));
+    CHECK(fixture.write_count == 2U);
+    CHECK(fixture.write_lengths[0] == sizeof(first));
+    CHECK(memcmp(fixture.writes[0], first, sizeof(first)) == 0);
+    CHECK(fixture.write_lengths[1] == sizeof(second));
+    CHECK(memcmp(fixture.writes[1], second, sizeof(second)) == 0);
+}
+
+/*
+ * 测试十三：到点播报时，若语速还没发，先发语速再发正文。
+ *
+ * 开机延时还差 1 毫秒时，tick 仍不发语速。
+ * 这时刷卡必须立刻出声，不能卡在开机延时里。
+ */
+static void test_announce_sends_speed_once_then_text(void)
+{
+    static const uint8_t text[] = {0xD1U, 0xD3U, 0x00U, 0xB0U, 0xB2U};
+    static const uint8_t speed[] = {'<', 'S', '>', '3'};
+    tts_fixture_t fixture = {0};
+    announce_t service = {0};
+
+    announce_init(&service, capture_tts_write, &fixture, true, 0U);
+    announce_tick(&service, (uint32_t)ANNOUNCE_STARTUP_DELAY_MS - 1U);
+    CHECK(fixture.write_count == 0U);
+    CHECK(announce_speak_now(&service, text, sizeof(text)));
+    CHECK(fixture.write_count == 2U);
+    CHECK(memcmp(fixture.writes[0], speed, sizeof(speed)) == 0);
+    CHECK(memcmp(fixture.writes[1], text, sizeof(text)) == 0);
+}
+
+/*
+ * 入口。把测试依次跑完，最后统一报结果。
  *
  * 返回 0 表示全过，返回 1 表示有失败。
  * 脚本里开了 set -e，返回非 0 会让整个脚本失败，方便接到自动化流程里。
@@ -629,6 +713,9 @@ int main(void)
     test_reader_retries_tag_dispatch_when_consumer_is_full();
     test_tts_uses_explicit_lengths_and_startup_speed_command();
     test_tts_queue_capacity_and_ascii_duration();
+    test_soft_start_maps_adc_to_delay();
+    test_announce_sends_current_text_immediately();
+    test_announce_sends_speed_once_then_text();
 
     if (g_failures != 0U) {
         fprintf(stderr, "%u test assertion(s) failed\n", g_failures);

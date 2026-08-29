@@ -1,19 +1,19 @@
 # src/app.c
 
-把读卡结果送到语音队列，并点一下指示灯。
+读到一张卡就立刻发这段文字，并点一下比赛灯。
 
 源文件：`src/app.c`
 
 ## 这个文件管什么
 
-它是应用层。不碰寄存器，只管三件事：读卡、语音、灯。
+它是应用层。不碰寄存器，只管三件事：读卡、立刻播报、灯。
 
 ```mermaid
 flowchart LR
     uart[USART1 字节] --> feed[rfid_reader_feed]
     feed --> event[读卡事件]
     event --> accept[app_accept_tag]
-    accept --> queue[语音队列]
+    accept --> speak[announce_speak_now]
     accept --> led[点亮 PA8]
 ```
 
@@ -22,7 +22,7 @@ flowchart LR
 | 名字 | 类型 | 说明 |
 |---|---|---|
 | `g_reader` | `rfid_reader_t` | 读卡状态机实例 |
-| `g_tts` | `tts_service_t` | 语音队列实例 |
+| `g_announce` | `announce_t` | 立刻播报实例，没有队列 |
 
 单片机上没有堆，也只需要一份，所以做成静态全局。
 
@@ -34,9 +34,9 @@ flowchart LR
 void app_init(uint32_t now_ms)
 ```
 
-做什么：先准备语音，再准备读卡。
+做什么：先准备播报，再准备读卡。
 
-为什么先语音：读卡器一启动就可能上报卡片，语音队列必须先能收。
+为什么先播报：读卡器一启动就可能上报卡片，这时必须能立刻发。
 
 ### app_process
 
@@ -48,7 +48,7 @@ void app_process(uint32_t now_ms)
 
 1. 倒空 RFID 环形缓冲，最多 128 字节。
 2. 推进读卡状态机。
-3. 推进语音队列。
+3. 推进立刻播报的开机语速。
 4. 推进板级定时。
 
 倒空循环的上限写成 `BOARD_RFID_RX_RING_SIZE`，避免中断一直进数时卡在这里。
@@ -79,9 +79,9 @@ static bool app_write_tts(void *context, const uint8_t *data, size_t length)
 static bool app_accept_tag(const rfid_reader_event_t *event)
 ```
 
-文字入队。入队成功就点亮 `PA8`。
+立刻发文字。发出去就点亮 `PA8`。
 
-队列满返回 `false`，读卡器会保住这张卡，过一会儿再送。
+串口失败返回 `false`，读卡器会保住这张卡，过一会儿再送。这不是排队。
 
 ### app_on_rfid_event
 
@@ -105,6 +105,7 @@ static void app_load_reader_config(rfid_reader_config_t *config)
 
 - 板级接口：[[include-board.h]]
 - 配置数字：[[include-app_config.h]]
+- 立刻播报：`include/announce.h`
 - 读卡状态机：库 `lib/rfid_core`，不改
 
 ## 相关页

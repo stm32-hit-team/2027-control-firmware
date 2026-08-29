@@ -33,10 +33,13 @@ clang \
   -fsanitize=address,undefined \
   -fno-omit-frame-pointer \
   -I"$project_dir/lib/rfid_core/include" \
+  -I"$project_dir/include" \
   "$project_dir/test/native/test_main.c" \
   "$project_dir/lib/rfid_core/src/rfid_protocol.c" \
   "$project_dir/lib/rfid_core/src/rfid_reader.c" \
   "$project_dir/lib/rfid_core/src/tts_service.c" \
+  "$project_dir/src/soft_start.c" \
+  "$project_dir/src/announce.c" \
   -o "$build_dir/native_tests"
 
 # 跑测试。有断言失败就返回非 0，配合上面的 set -e 让整个脚本失败。

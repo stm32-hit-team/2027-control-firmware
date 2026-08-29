@@ -1,9 +1,7 @@
-/*
- * app_config.h：固件里能调的数字都放这里。
- * 只放常量和开关，不放逻辑。改完重新编译即可。
- */
 #ifndef APP_CONFIG_H
 #define APP_CONFIG_H
+
+/* 固件里能调的数字都放这里。只放常量和开关，不放逻辑。 */
 
 /*
  * 两路串口都是 9600。
@@ -33,21 +31,26 @@ enum {
     APP_LED_MARK_DURATION_MS = 500
 };
 
-/*
- * 电机 PWM 默认关闭。
- * 打开要编 stm32f103c8_motor_check。
- * 驱动芯片的唤醒脚不在 MCU 上，只出 PWM 不一定会转。
- */
-#ifndef APP_ENABLE_MOTOR
-#define APP_ENABLE_MOTOR 0
-#endif
+enum {
+    APP_SOFT_START_MIN_MS = 10000,
+    APP_SOFT_START_MAX_MS = 600000,
+    APP_ADC_FULL_SCALE    = 4095,
+    APP_ADC_SAMPLE_COUNT  = 20
+};
 
 enum {
-    APP_MOTOR_START_DELAY_MS = 3000,
     APP_MOTOR_RAMP_MS        = 1000,
     APP_MOTOR_RUN_TIMEOUT_MS = 600000,
     APP_MOTOR_TARGET_COMPARE = 850,
     APP_MOTOR_PWM_PERIOD     = 999
 };
+
+/*
+ * 电机默认打开。缓启动等待时间由 PB1 旋钮决定。
+ * 首次上板必须架空车轮。
+ */
+#ifndef APP_ENABLE_MOTOR
+#define APP_ENABLE_MOTOR 1
+#endif
 
 #endif /* APP_CONFIG_H */

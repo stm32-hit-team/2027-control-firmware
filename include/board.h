@@ -1,6 +1,3 @@
-/*
- * board.h：这块板的时钟、串口、指示灯和可选电机。
- */
 #ifndef BOARD_H
 #define BOARD_H
 
@@ -23,9 +20,19 @@ typedef enum {
     BOARD_ERR_IO    = -3
 } board_status_t;
 
-/* 配时钟、PA8 灯、USART1、USART2，以及可选的 TIM2。
- * 时钟或串口失败会关中断后停住。main 救不了，所以这里不返回状态。 */
+/*
+ * 配时钟、PA8 灯、USART1、USART2，读 PB1 旋钮，以及可选的 TIM2。
+ * 时钟或串口失败会关中断后停住。main 救不了，所以这里不返回状态。
+ * 规范要求返回状态枚举。
+ * 启动失败只能停住，不能把坏时钟交回给调用方。
+ */
 void board_init(void);
+
+/*
+ * 上电时从 PB1 读到的缓启动等待时间。电机用它，不要再采。
+ * 规范要求返回状态枚举。计划规定返回毫秒数，这里不能改签名。
+ */
+uint32_t board_soft_start_delay_ms(void);
 
 /* 返回开机后的毫秒数。到 2^32 会翻回 0。 */
 uint32_t board_millis(void);
