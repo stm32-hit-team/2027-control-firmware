@@ -29,10 +29,10 @@ typedef enum {
 void board_init(void);
 
 /*
- * 上电时从 PB1 读到的缓启动等待时间。电机用它，不要再采。
+ * 上电时从 PB1 读到的停车时间。电机用它，不要再采。
  * 规范要求返回状态枚举。计划规定返回毫秒数，这里不能改签名。
  */
-uint32_t board_soft_start_delay_ms(void);
+uint32_t board_motor_stop_time_ms(void);
 
 /* 返回开机后的毫秒数。到 2^32 会翻回 0。 */
 uint32_t board_millis(void);

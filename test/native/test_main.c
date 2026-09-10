@@ -616,11 +616,24 @@ static void test_tts_queue_capacity_and_ascii_duration(void)
 
 enum {
     SOFT_START_TEST_MID_RAW = 2048,
-    SOFT_START_TEST_OVER_RAW = APP_ADC_FULL_SCALE + 1
+    SOFT_START_TEST_OVER_RAW = APP_ADC_FULL_SCALE + 1,
+    SOFT_START_TEST_MID_STOP_MS = 482000
 };
 
-/* 核对 12 位 ADC 两端和中间一点对应的缓启动等待时间。 */
-static void test_soft_start_maps_adc_to_delay(void);
+static const uint8_t RFID_WORK_BAUD_BODY[] = {
+    0x00U, 0x2CU, 0x00U, 0x01U, 0xC2U, 0x00U, 0x98U, 0x24U, 0x31U
+};
+
+static const uint8_t RFID_WORK_BAUD_FRAME[] = {
+    0x7FU, 0x0AU, 0x00U, 0x2CU, 0x00U, 0x01U, 0xC2U, 0x00U, 0x98U, 0x24U, 0x31U,
+    0x68U
+};
+
+/* 核对 12 位 ADC 两端和中间一点对应的停车时间。 */
+static void test_soft_start_maps_adc_to_stop_ms(void);
+
+/* 改 115200 的命令帧必须和省赛 SetBound115200 一致。 */
+static void test_rfid_work_baud_frame_matches_province(void);
 
 /* 两次 speak_now 都立刻发出去，中间不用 tick。 */
 static void test_announce_sends_current_text_immediately(void);
@@ -629,25 +642,32 @@ static void test_announce_sends_current_text_immediately(void);
 static void test_announce_sends_speed_once_then_text(void);
 
 /*
- * 测试十一：PB1 的 ADC 读数换成缓启动等待时间。
+ * 测试十一：PB1 的 ADC 读数换成停车时间。
  *
- * 0 对应最短等待，满量程对应最长等待，超过满量程按满量程算。
- * 中间值按线性插值，公式和 soft_start_delay_ms 一致。
+ * 公式对齐省赛：低电压电阻大、跑得久；满量程电阻按 0、跑最短。
+ * 超过满量程按满量程。中间 2048 对应 482000 ms。
  */
-static void test_soft_start_maps_adc_to_delay(void)
+static void test_soft_start_maps_adc_to_stop_ms(void)
 {
-    uint32_t mid_delay_ms =
-        (uint32_t)APP_SOFT_START_MIN_MS +
-        ((uint32_t)APP_SOFT_START_MAX_MS - (uint32_t)APP_SOFT_START_MIN_MS) *
-            (uint32_t)SOFT_START_TEST_MID_RAW / (uint32_t)APP_ADC_FULL_SCALE;
+    CHECK(soft_start_stop_ms(0U) == (uint32_t)APP_MOTOR_STOP_MAX_MS);
+    CHECK(soft_start_stop_ms((uint16_t)APP_ADC_FULL_SCALE) ==
+          (uint32_t)APP_MOTOR_STOP_MIN_MS);
+    CHECK(soft_start_stop_ms((uint16_t)SOFT_START_TEST_OVER_RAW) ==
+          (uint32_t)APP_MOTOR_STOP_MIN_MS);
+    CHECK(soft_start_stop_ms((uint16_t)SOFT_START_TEST_MID_RAW) ==
+          (uint32_t)SOFT_START_TEST_MID_STOP_MS);
+}
 
-    CHECK(soft_start_delay_ms(0U) == (uint32_t)APP_SOFT_START_MIN_MS);
-    CHECK(soft_start_delay_ms((uint16_t)APP_ADC_FULL_SCALE) ==
-          (uint32_t)APP_SOFT_START_MAX_MS);
-    CHECK(soft_start_delay_ms((uint16_t)SOFT_START_TEST_OVER_RAW) ==
-          (uint32_t)APP_SOFT_START_MAX_MS);
-    CHECK(soft_start_delay_ms((uint16_t)SOFT_START_TEST_MID_RAW) ==
-          mid_delay_ms);
+static void test_rfid_work_baud_frame_matches_province(void)
+{
+    uint8_t encoded[RFID_PROTOCOL_MAX_ENCODED_SIZE];
+    size_t length =
+        rfid_protocol_encode_body(RFID_WORK_BAUD_BODY, sizeof(RFID_WORK_BAUD_BODY),
+                                  encoded, sizeof(encoded));
+
+    CHECK(length == sizeof(RFID_WORK_BAUD_FRAME));
+    CHECK(memcmp(encoded, RFID_WORK_BAUD_FRAME, sizeof(RFID_WORK_BAUD_FRAME)) ==
+          0);
 }
 
 /*
@@ -713,7 +733,8 @@ int main(void)
     test_reader_retries_tag_dispatch_when_consumer_is_full();
     test_tts_uses_explicit_lengths_and_startup_speed_command();
     test_tts_queue_capacity_and_ascii_duration();
-    test_soft_start_maps_adc_to_delay();
+    test_soft_start_maps_adc_to_stop_ms();
+    test_rfid_work_baud_frame_matches_province();
     test_announce_sends_current_text_immediately();
     test_announce_sends_speed_once_then_text();
 

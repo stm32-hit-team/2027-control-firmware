@@ -1,5 +1,5 @@
 /*
- * board_stm32.c：STM32F103 上的时钟、PA8 灯、USART1/2、PB1 旋钮和可选 TIM2。
+ * board_stm32.c：STM32F103 上的时钟、PA8 灯、USART1/2、PB1 停车旋钮和可选 TIM2。
  * 引脚按工创赛 26 新板网表，不按丝印图。
  */
 
@@ -9,6 +9,7 @@
 
 #include "app_config.h"
 #include "board.h"
+#include "rfid_protocol.h"
 #include "soft_start.h"
 #include "stm32f1xx_hal.h"
 
@@ -21,8 +22,12 @@ enum {
     BOARD_UART_TX_PINS           = GPIO_PIN_9 | GPIO_PIN_2,
     BOARD_UART_RX_PINS           = GPIO_PIN_10 | GPIO_PIN_3,
     BOARD_MOTOR_PWM_PINS         = GPIO_PIN_0 | GPIO_PIN_1,
-    BOARD_SOFT_START_PIN         = GPIO_PIN_1,
+    BOARD_MOTOR_KNOB_PIN         = GPIO_PIN_1,
     BOARD_ADC_POLL_TIMEOUT_MS    = 10
+};
+
+static const uint8_t BOARD_RFID_WORK_BAUD_BODY[] = {
+    0x00U, 0x2CU, 0x00U, 0x01U, 0xC2U, 0x00U, 0x98U, 0x24U, 0x31U
 };
 
 /* 把非 OK 状态交回给调用方。只许用在没有获取资源的函数里。
@@ -45,7 +50,7 @@ static volatile uint32_t g_rfid_rx_overflows;
 
 static uint8_t g_led_on;
 static uint32_t g_led_off_deadline_ms;
-static uint32_t g_soft_start_delay_ms = APP_SOFT_START_MIN_MS;
+static uint32_t g_motor_stop_time_ms = APP_MOTOR_STOP_MIN_MS;
 
 #if APP_ENABLE_MOTOR
 static TIM_HandleTypeDef g_motor_timer;
@@ -80,8 +85,14 @@ static void board_configure_uarts(void);
 /* 给 USART1/2 配好 GPIOA 上的 TX/RX。 */
 static void board_configure_uart_gpio(void);
 
-/* 按读卡波特率初始化 USART1。失败则停住。 */
+/* 先按 9600 打开 USART1，再改成工作波特率。失败则停住。 */
 static void board_configure_rfid_uart(void);
+
+/* 发出改速命令后，把 USART1 改成工作波特率。失败则停住。 */
+static void board_rfid_switch_to_work_baud(void);
+
+/* 按省赛制式发出改 115200 命令。失败则停住。 */
+static void board_rfid_send_work_baud_command(void);
 
 /* 填好 UART 句柄。uart、inst 不能为空。 */
 static void board_fill_uart(UART_HandleTypeDef *uart, USART_TypeDef *inst,
@@ -99,40 +110,40 @@ static void board_enable_rfid_irq(void);
 /* 适配 HAL_UART_Receive_IT，向 USART1 再要 1 字节。失败返回 BOARD_ERR_IO。 */
 static board_status_t board_rfid_request_rx(void);
 
-/* 上电读 PB1 旋钮，写入 g_soft_start_delay_ms。ADC 失败用最短等待。 */
-static void board_read_soft_start_knob(void);
+/* 上电读 PB1 旋钮，写入 g_motor_stop_time_ms。ADC 失败用最短停车。 */
+static void board_read_motor_knob(void);
 
-/* 写入缓启动等待时间。delay_ms 必须落在配置的最短和最长之间。 */
-static void board_store_soft_start_delay_ms(uint32_t delay_ms);
+/* 写入停车时间。stop_ms 必须落在配置的最短和最长之间。 */
+static void board_store_motor_stop_time_ms(uint32_t stop_ms);
 
 /* 配好 PB1 旋钮用的 ADC1。adc 不能为空。
  * ADC 或校准失败返回 BOARD_ERR_IO，不要停死。 */
-static board_status_t board_configure_soft_start_adc(ADC_HandleTypeDef *adc);
+static board_status_t board_configure_motor_knob_adc(ADC_HandleTypeDef *adc);
 
 /* 打开 GPIOA、GPIOB、ADC1 时钟。GPIOA 给灯用。 */
-static void board_enable_soft_start_clocks(void);
+static void board_enable_motor_knob_clocks(void);
 
 /* 把 ADC 时钟设为 PCLK2 / 6。失败返回 BOARD_ERR_IO。 */
-static board_status_t board_configure_soft_start_adc_clock(void);
+static board_status_t board_configure_motor_knob_adc_clock(void);
 
 /* 把 PB1 配成模拟输入。 */
-static void board_configure_soft_start_pin(void);
+static void board_configure_motor_knob_pin(void);
 
 /* 填好 ADC1 软件触发。adc 不能为空。 */
-static void board_fill_soft_start_adc(ADC_HandleTypeDef *adc);
+static void board_fill_motor_knob_adc(ADC_HandleTypeDef *adc);
 
 /* 适配 HAL_ADC_Init。adc 不能为空。失败返回 BOARD_ERR_IO。 */
 static board_status_t board_adc_init(ADC_HandleTypeDef *adc);
 
 /* 适配 HAL_ADC_ConfigChannel，接到通道 9。adc 不能为空。 */
-static board_status_t board_adc_apply_soft_start_channel(ADC_HandleTypeDef *adc);
+static board_status_t board_adc_apply_motor_knob_channel(ADC_HandleTypeDef *adc);
 
 /* 适配 HAL_ADCEx_Calibration_Start。adc 不能为空。 */
 static board_status_t board_adc_calibrate(ADC_HandleTypeDef *adc);
 
 /* 连续采 APP_ADC_SAMPLE_COUNT 次，写入平均值。adc、out_average 不能为空。
  * 任一次失败返回 BOARD_ERR_IO。 */
-static board_status_t board_sample_soft_start_adc(ADC_HandleTypeDef *adc,
+static board_status_t board_sample_motor_knob_adc(ADC_HandleTypeDef *adc,
                                                   uint16_t *out_average);
 
 /* 软件触发一次转换，写入 *out_raw。adc、out_raw 不能为空。
@@ -152,8 +163,8 @@ static uint32_t board_adc_read_value(ADC_HandleTypeDef *adc);
 /* 适配 HAL_ADC_Stop。adc 不能为空。返回值忽略，与原先一致。 */
 static void board_adc_stop(ADC_HandleTypeDef *adc);
 
-/* 适配 soft_start_delay_ms。 */
-static uint32_t board_soft_start_from_raw(uint16_t adc_raw);
+/* 适配 soft_start_stop_ms。 */
+static uint32_t board_motor_stop_from_raw(uint16_t adc_raw);
 
 #if APP_ENABLE_MOTOR
 /* 配 TIM2 两路 PWM，上电先 coast。失败则停住。 */
@@ -212,11 +223,11 @@ static bool board_time_reached(uint32_t now_ms, uint32_t deadline_ms);
 static void board_led_off(void);
 
 #if APP_ENABLE_MOTOR
-/* 按缓启动等待、爬升、巡航和超时改比较值。 */
+/* 按晚启动、爬升、巡航和旋钮停车时间改比较值。 */
 static void board_process_motor(uint32_t now_ms);
 
-/* 过了缓启动等待后，按爬升、巡航或超时给出比较值。 */
-static uint16_t board_motor_compare_after_wait(uint32_t moving_ms);
+/* 过了晚启动后，按爬升、巡航或停车时间给出比较值。 */
+static uint16_t board_motor_compare_after_start(uint32_t moving_ms);
 #endif
 
 /* 把一字节写入环形缓冲。满则丢掉并计数。 */
@@ -233,18 +244,18 @@ void board_init(void)
     board_configure_clock();
     board_configure_led();
     board_configure_uarts();
-    board_read_soft_start_knob();
+    board_read_motor_knob();
 #if APP_ENABLE_MOTOR
     board_configure_motor();
 #endif
 }
 
 /* 规范要求返回状态枚举。计划规定返回毫秒数，这里不能改签名。 */
-uint32_t board_soft_start_delay_ms(void)
+uint32_t board_motor_stop_time_ms(void)
 {
-    assert(g_soft_start_delay_ms >= (uint32_t)APP_SOFT_START_MIN_MS);
-    assert(g_soft_start_delay_ms <= (uint32_t)APP_SOFT_START_MAX_MS);
-    return g_soft_start_delay_ms;
+    assert(g_motor_stop_time_ms >= (uint32_t)APP_MOTOR_STOP_MIN_MS);
+    assert(g_motor_stop_time_ms <= (uint32_t)APP_MOTOR_STOP_MAX_MS);
+    return g_motor_stop_time_ms;
 }
 
 uint32_t board_millis(void)
@@ -400,8 +411,29 @@ static void board_configure_uart_gpio(void)
 
 static void board_configure_rfid_uart(void)
 {
+    board_fill_uart(&g_rfid_uart, USART1, APP_RFID_SETUP_BAUD_RATE);
+    board_require_hal_ok(HAL_UART_Init(&g_rfid_uart));
+    board_rfid_switch_to_work_baud();
+}
+
+static void board_rfid_switch_to_work_baud(void)
+{
+    board_rfid_send_work_baud_command();
     board_fill_uart(&g_rfid_uart, USART1, APP_RFID_BAUD_RATE);
     board_require_hal_ok(HAL_UART_Init(&g_rfid_uart));
+}
+
+static void board_rfid_send_work_baud_command(void)
+{
+    uint8_t encoded[RFID_PROTOCOL_MAX_ENCODED_SIZE];
+    size_t length = rfid_protocol_encode_body(BOARD_RFID_WORK_BAUD_BODY,
+                                              sizeof(BOARD_RFID_WORK_BAUD_BODY),
+                                              encoded, sizeof(encoded));
+
+    if (length == 0U)
+        board_fail_stop();
+    if (board_uart_send(&g_rfid_uart, encoded, length) != BOARD_OK)
+        board_fail_stop();
 }
 
 static void board_fill_uart(UART_HandleTypeDef *uart, USART_TypeDef *inst,
@@ -447,50 +479,50 @@ static board_status_t board_rfid_request_rx(void)
     return BOARD_OK;
 }
 
-static void board_read_soft_start_knob(void)
+static void board_read_motor_knob(void)
 {
     ADC_HandleTypeDef adc = {0};
 
-    board_store_soft_start_delay_ms((uint32_t)APP_SOFT_START_MIN_MS);
-    if (board_configure_soft_start_adc(&adc) != BOARD_OK)
+    board_store_motor_stop_time_ms((uint32_t)APP_MOTOR_STOP_MIN_MS);
+    if (board_configure_motor_knob_adc(&adc) != BOARD_OK)
         return;
 
     uint16_t average_raw = 0;
 
-    if (board_sample_soft_start_adc(&adc, &average_raw) != BOARD_OK)
+    if (board_sample_motor_knob_adc(&adc, &average_raw) != BOARD_OK)
         return;
 
-    board_store_soft_start_delay_ms(board_soft_start_from_raw(average_raw));
+    board_store_motor_stop_time_ms(board_motor_stop_from_raw(average_raw));
 }
 
-static void board_store_soft_start_delay_ms(uint32_t delay_ms)
+static void board_store_motor_stop_time_ms(uint32_t stop_ms)
 {
-    assert(delay_ms >= (uint32_t)APP_SOFT_START_MIN_MS);
-    assert(delay_ms <= (uint32_t)APP_SOFT_START_MAX_MS);
-    g_soft_start_delay_ms = delay_ms;
-    assert(g_soft_start_delay_ms == delay_ms);
+    assert(stop_ms >= (uint32_t)APP_MOTOR_STOP_MIN_MS);
+    assert(stop_ms <= (uint32_t)APP_MOTOR_STOP_MAX_MS);
+    g_motor_stop_time_ms = stop_ms;
+    assert(g_motor_stop_time_ms == stop_ms);
 }
 
-static board_status_t board_configure_soft_start_adc(ADC_HandleTypeDef *adc)
+static board_status_t board_configure_motor_knob_adc(ADC_HandleTypeDef *adc)
 {
     assert(adc != NULL);
 
-    board_enable_soft_start_clocks();
-    if (board_configure_soft_start_adc_clock() != BOARD_OK)
+    board_enable_motor_knob_clocks();
+    if (board_configure_motor_knob_adc_clock() != BOARD_OK)
         return BOARD_ERR_IO;
 
-    board_configure_soft_start_pin();
-    board_fill_soft_start_adc(adc);
+    board_configure_motor_knob_pin();
+    board_fill_motor_knob_adc(adc);
     if (board_adc_init(adc) != BOARD_OK)
         return BOARD_ERR_IO;
-    if (board_adc_apply_soft_start_channel(adc) != BOARD_OK)
+    if (board_adc_apply_motor_knob_channel(adc) != BOARD_OK)
         return BOARD_ERR_IO;
     if (board_adc_calibrate(adc) != BOARD_OK)
         return BOARD_ERR_IO;
     return BOARD_OK;
 }
 
-static void board_enable_soft_start_clocks(void)
+static void board_enable_motor_knob_clocks(void)
 {
     /* PB1 在 GPIOB。计划写了 GPIOA，按网表开 GPIOB。GPIOA 仍打开，给灯用。 */
     __HAL_RCC_GPIOA_CLK_ENABLE();
@@ -498,7 +530,7 @@ static void board_enable_soft_start_clocks(void)
     __HAL_RCC_ADC1_CLK_ENABLE();
 }
 
-static board_status_t board_configure_soft_start_adc_clock(void)
+static board_status_t board_configure_motor_knob_adc_clock(void)
 {
     RCC_PeriphCLKInitTypeDef adc_clock = {
         .PeriphClockSelection = RCC_PERIPHCLK_ADC,
@@ -510,10 +542,10 @@ static board_status_t board_configure_soft_start_adc_clock(void)
     return BOARD_OK;
 }
 
-static void board_configure_soft_start_pin(void)
+static void board_configure_motor_knob_pin(void)
 {
     GPIO_InitTypeDef gpio = {
-        .Pin = BOARD_SOFT_START_PIN,
+        .Pin = BOARD_MOTOR_KNOB_PIN,
         .Mode = GPIO_MODE_ANALOG,
         .Pull = GPIO_NOPULL
     };
@@ -521,7 +553,7 @@ static void board_configure_soft_start_pin(void)
     HAL_GPIO_Init(GPIOB, &gpio);
 }
 
-static void board_fill_soft_start_adc(ADC_HandleTypeDef *adc)
+static void board_fill_motor_knob_adc(ADC_HandleTypeDef *adc)
 {
     assert(adc != NULL);
 
@@ -546,7 +578,7 @@ static board_status_t board_adc_init(ADC_HandleTypeDef *adc)
     return BOARD_OK;
 }
 
-static board_status_t board_adc_apply_soft_start_channel(ADC_HandleTypeDef *adc)
+static board_status_t board_adc_apply_motor_knob_channel(ADC_HandleTypeDef *adc)
 {
     ADC_ChannelConfTypeDef channel = {
         .Channel = ADC_CHANNEL_9,
@@ -568,7 +600,7 @@ static board_status_t board_adc_calibrate(ADC_HandleTypeDef *adc)
     return BOARD_OK;
 }
 
-static board_status_t board_sample_soft_start_adc(ADC_HandleTypeDef *adc,
+static board_status_t board_sample_motor_knob_adc(ADC_HandleTypeDef *adc,
                                                   uint16_t *out_average)
 {
     uint32_t sum = 0;
@@ -635,9 +667,9 @@ static void board_adc_stop(ADC_HandleTypeDef *adc)
     (void)HAL_ADC_Stop(adc);
 }
 
-static uint32_t board_soft_start_from_raw(uint16_t adc_raw)
+static uint32_t board_motor_stop_from_raw(uint16_t adc_raw)
 {
-    return soft_start_delay_ms(adc_raw);
+    return soft_start_stop_ms(adc_raw);
 }
 
 #if APP_ENABLE_MOTOR
@@ -801,21 +833,21 @@ static void board_led_off(void)
 static void board_process_motor(uint32_t now_ms)
 {
     const uint32_t elapsed_ms = now_ms - g_motor_start_ms;
-    const uint32_t wait_ms = board_soft_start_delay_ms();
 
-    if (elapsed_ms < wait_ms) {
+    if (elapsed_ms < (uint32_t)APP_MOTOR_START_LATE_MS) {
         board_motor_apply(0U);
         return;
     }
 
-    board_motor_apply(board_motor_compare_after_wait(elapsed_ms - wait_ms));
+    board_motor_apply(board_motor_compare_after_start(
+        elapsed_ms - (uint32_t)APP_MOTOR_START_LATE_MS));
 }
 
-static uint16_t board_motor_compare_after_wait(uint32_t moving_ms)
+static uint16_t board_motor_compare_after_start(uint32_t moving_ms)
 {
-    if (moving_ms >= APP_MOTOR_RUN_TIMEOUT_MS)
+    if (moving_ms >= board_motor_stop_time_ms())
         return 0;
-    if (moving_ms >= APP_MOTOR_RAMP_MS)
+    if (moving_ms >= (uint32_t)APP_MOTOR_RAMP_MS)
         return (uint16_t)APP_MOTOR_TARGET_COMPARE;
 
     assert(APP_MOTOR_RAMP_MS != 0);

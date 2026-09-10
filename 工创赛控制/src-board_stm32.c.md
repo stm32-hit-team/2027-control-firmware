@@ -168,11 +168,11 @@ static void board_configure_uart_gpio(void)
 static void board_fill_uart(UART_HandleTypeDef *uart, USART_TypeDef *inst, uint32_t baud)
 ```
 
-填一路串口的参数：9600、8 位、1 停止、无校验。
+填一路串口的参数：波特率由调用方传入，8 位、1 停止、无校验。
 
 ### board_configure_rfid_uart / board_configure_tts_uart
 
-分别配 USART1 和 USART2。失败就停住。
+USART1 先按 9600 打开，发出改 115200 命令，再按 115200 工作。USART2 一直是 9600。失败就停住。
 
 ### board_arm_rfid_irq
 
@@ -216,7 +216,7 @@ static board_status_t board_uart_send(UART_HandleTypeDef *uart, const uint8_t *d
 
 - `board_motor_apply`：写占空比。0 表示停车，两路同电位。
 - `board_configure_motor`：配 TIM2 两路 PWM，约 1 kHz。
-- `board_process_motor`：先停 3 秒，再 1 秒升速，最长 10 分钟自动停。
+- `board_process_motor`：先停 3 秒，再 3 秒升速，停车时间由 `PB1` 旋钮决定。
 
 ## 中断入口
 

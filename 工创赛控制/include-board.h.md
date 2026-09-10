@@ -31,7 +31,15 @@
 void board_init(void);
 ```
 
-配时钟、PA8 灯、USART1、USART2，以及可选的 TIM2。失败会停住。
+配时钟、PA8 灯、USART1、USART2，读 PB1 停车旋钮，以及可选的 TIM2。失败会停住。
+
+### board_motor_stop_time_ms
+
+```c
+uint32_t board_motor_stop_time_ms(void);
+```
+
+上电时从 `PB1` 读到的停车毫秒数。电机用它，不要再采。
 
 ### board_millis
 
