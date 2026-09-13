@@ -11,7 +11,7 @@ set -eu
 # 从脚本所在位置往上一级，得到工程根目录。
 # 这样不管在哪个目录下调用这个脚本都能跑对。
 project_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-build_dir="$project_dir/.pio/host-tests"
+build_dir="$project_dir/.cache/host-tests"
 
 mkdir -p "$build_dir"
 

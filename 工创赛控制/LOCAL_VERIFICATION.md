@@ -2,6 +2,8 @@
 
 日期：2026-07-23
 
+这是当时的记录，不是当前默认行为。现在电机默认打开，应用层用立刻播报，不再走库里的语音队列。当前说明看 [README.md](../README.md) 和 [[07-模块原理]]。
+
 环境：macOS、PlatformIO Core 6.1.19、ST STM32 platform 19.5.0、Apple Clang
 
 ## 已通过
@@ -51,4 +53,4 @@ AddressSanitizer 与 UndefinedBehaviorSanitizer。覆盖内容：
 5. `led灯1` 确实接在 `PA8`，低电平极性正确。
 6. 电机驱动器对 PA0/PA1 的停止、正转真值表与去年一致。
 
-在完成第 6 项前保持 `APP_ENABLE_MOTOR=0`。首次电机测试必须架空车轮并准备断电。
+当时记录建议完成第 6 项前保持 `APP_ENABLE_MOTOR=0`。当前仓库默认已经打开电机。首次上板仍必须架空车轮并准备断电。
