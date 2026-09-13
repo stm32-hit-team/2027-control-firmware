@@ -79,6 +79,7 @@ JLinkLog.txt
 EventRecorderStub.scvd
 compile_commands.json
 工创赛控制/.obsidian/workspace.json
+scripts/__pycache__/
 """
 
 
